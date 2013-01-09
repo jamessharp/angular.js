@@ -385,6 +385,13 @@ angular.module('ngOrtooResource', ['ng']).
               arguments.length + " arguments.";
           }
 
+          // If we have data then make sure it goes under the rootKey
+          if (data) {
+            var oldData = data;
+            data = {};
+            data[(action.isArray ? rootKeyPlural: rootKey)] = oldData;
+          }
+
           var value = this instanceof Resource ? this : (action.isArray ? [] : new Resource(data));
           $http({
             method: action.method,
