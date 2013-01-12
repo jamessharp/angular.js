@@ -79,7 +79,6 @@ task :concat => :init do
       'src/ngSanitize/directive/ngBindHtml.js',
       'src/ngSanitize/filter/linky.js'])
 
-  concat_module('ortooResource', ['src/ortooResource/resource.js'])
   concat_module('resource', ['src/ngResource/resource.js'])
   concat_module('cookies', ['src/ngCookies/cookies.js'])
   concat_module('bootstrap', ['src/bootstrap/bootstrap.js'])
@@ -101,7 +100,6 @@ task :minify => [:init, :concat, :concat_scenario] do
   [ 'angular.js',
     'angular-cookies.js',
     'angular-loader.js',
-    'angular-ortooResource.js',
     'angular-resource.js',
     'angular-sanitize.js',
     'angular-bootstrap.js',

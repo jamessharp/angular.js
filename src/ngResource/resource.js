@@ -213,7 +213,7 @@
     </doc:example>
  */
 angular.module('ngResource', ['ng']).
-  factory('$resource', ['$http', '$parse', function($http, $parse) {
+  factory('$resource', ['$http', '$parse', '$log', function($http, $parse, $log) {
     var DEFAULT_ACTIONS = {
       'get':    {method:'GET'},
       'save':   {method:'POST'},
@@ -312,10 +312,41 @@ angular.module('ngResource', ['ng']).
     };
 
 
-    function ResourceFactory(url, paramDefaults, actions) {
+    function ResourceFactory(opts, paramDefaults, actions) {
+      var url, rootKey, rootKeyPlural, idKey;
+      // Sort out parameters. We accept the old way: (url, paramDefaults, actions) or the
+      // new way which is taking a single object as an argument
+      if (typeof opts == 'string') {
+        // Old signature
+        url = opts;
+      } else if (typeof opts == 'object') {
+        url = opts.url;
+        paramDefaults = opts.paramDefaults;
+        actions = opts.actions;
+        rootKey = opts.rootKey;
+        if (rootKey) { rootKeyPlural = opts.rootKeyPlural || (opts.rootKey + 's'); }
+        idKey = opts.idKey;
+      }
+
       var route = new Route(url);
 
       actions = extend({}, DEFAULT_ACTIONS, actions);
+
+      // Create a map mapping ids to the objects themselves so we only ever have one object in play
+      // per id
+      var idMap = {};
+
+      // The param defaults should contain a mapping for the idKey to the url parameter
+      var paramIdKey;
+      if (idKey) {
+        forEach(paramDefaults, function(value, key) {
+          if (isFunction(value)) { value = value(); }
+          var idParam = '@' + idKey;
+          if (value == idParam) {
+            paramIdKey = key;
+          }
+        });
+      }
 
       function extractParams(data, actionParams){
         var ids = {};
@@ -327,8 +358,22 @@ angular.module('ngResource', ['ng']).
         return ids;
       }
 
-      function Resource(value){
-        copy(value || {}, this);
+      function Resource(value, id){
+        var obj = this;
+        value = value || {};
+
+        // If we have an idKey then return or register the object
+        // for the given id.
+        if (idKey) {
+          id = id || getter(value, idKey);
+          if (id && idMap[id]) {
+            obj = idMap[id];
+          } else if (id) {
+            idMap[id] = obj;
+          }
+        }
+        copy(value, obj);
+        return obj;
       }
 
       forEach(actions, function(action, name) {
@@ -373,14 +418,47 @@ angular.module('ngResource', ['ng']).
               arguments.length + " arguments.";
           }
 
-          var value = this instanceof Resource ? this : (action.isArray ? [] : new Resource(data));
+          // If we have data then make sure it goes under the rootKey when posting
+          var postdata;
+          if (data) {
+            postdata = {};
+            if (rootKey) {
+              postdata[(action.isArray ? rootKeyPlural: rootKey)] = data;
+            } else {
+              postdata = data;
+            }
+          }
+
+          // Do we have an id parameter passed in, in which case we want to extract it and put
+          // it on the data so that we will get the correct object passed back when calling new Resource
+          var allParams = extend({}, extractParams(data, action.params || {}), params);
+          var resId;
+          if (idKey && paramIdKey) {
+            var paramId = allParams[paramIdKey];
+            if (paramId != '@' + idKey) { resId = allParams[paramIdKey]; }
+          }
+
+          // Calling new Resource with data that contains an id will cause the original object
+          // to be returned if it exists...
+          var value = this instanceof Resource ? this : (action.isArray ? [] : new Resource(data, resId));
           $http({
             method: action.method,
-            url: route.url(extend({}, extractParams(data, action.params || {}), params)),
-            data: data,
+            url: route.url(allParams),
+            data: postdata,
             headers: extend({}, action.headers || {})
           }).then(function(response) {
               var data = response.data;
+
+              if (!!rootKey && !!rootKeyPlural) {
+                var key;
+                // Do we need the plural version?
+                if (action.isArray) {
+                  key = rootKeyPlural;
+                } else {
+                  key = rootKey;
+                }
+                data = data[key];
+              }
 
               if (data) {
                 if (action.isArray) {
@@ -389,6 +467,19 @@ angular.module('ngResource', ['ng']).
                     value.push(new Resource(item));
                   });
                 } else {
+                  if (idKey) {
+                    var id = getter(data, idKey);
+                    var exVal = idMap[id];
+
+                    // If we have an existing value and that isn't the
+                    // current value then don't really know what to do
+                    // - log an error
+                    if(exVal && (exVal !== value)) { $log.error("Have two objects with the same id!"); }
+
+                    // If this is the first time we've seen this id then store it off
+                    if (!exVal) { idMap[id] = value; }
+
+                  }
                   copy(data, value);
                 }
               }
