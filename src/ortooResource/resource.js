@@ -213,7 +213,7 @@
     </doc:example>
  */
 angular.module('ngOrtooResource', ['ng']).
-  factory('ortooResource', ['$http', '$parse', function($http, $parse) {
+  factory('ortooResource', ['$http', '$parse', '$log', function($http, $parse, $log) {
     var DEFAULT_ACTIONS = {
       'get':    {method:'GET'},
       'save':   {method:'POST'},
@@ -312,7 +312,7 @@ angular.module('ngOrtooResource', ['ng']).
     };
 
 
-    function ResourceFactory(url, rootKey, paramDefaults, actions) {
+    function ResourceFactory(url, rootKey, idKey, paramDefaults, actions) {
       var route = new Route(url);
       var rootKeyPlural;
 
@@ -329,6 +329,25 @@ angular.module('ngOrtooResource', ['ng']).
         }
       }
 
+      // Create a map mapping ids to the objects themselves so we only ever have one object in play
+      // per id
+      var idMap = {};
+
+      function getOrCreateIdMappedObj(data) {
+        var value;
+        if (data && data[idKey] && idMap[data[idKey]]) {
+          value = idMap[data[idKey]];
+          copy(data, value);
+        } else {
+          value = new Resource(data);
+          if (data && data[idKey]) {
+            // We do have an id so store it off in the map
+            idMap[data[idKey]] = value;
+          }
+        }
+        return value;
+      }
+
       function extractParams(data, actionParams){
         var ids = {};
         actionParams = extend({}, paramDefaults, actionParams);
@@ -340,7 +359,15 @@ angular.module('ngOrtooResource', ['ng']).
       }
 
       function Resource(value){
-        copy(value || {}, this);
+        value = value || {};
+
+        // If an id has been passed in then return the instance of that object
+        var obj = this;
+        if (value[idKey] && idMap[value[idKey]])
+          obj = idMap[value[idKey]];
+
+        copy(value, obj);
+        return obj;
       }
 
       forEach(actions, function(action, name) {
@@ -385,23 +412,33 @@ angular.module('ngOrtooResource', ['ng']).
               arguments.length + " arguments.";
           }
 
-          // If we have data then make sure it goes under the rootKey
+          // If we have data then make sure it goes under the rootKey when posting
+          var postdata;
           if (data) {
-            var oldData = data;
-            data = {};
-            data[(action.isArray ? rootKeyPlural: rootKey)] = oldData;
+            postdata = {};
+            postdata[(action.isArray ? rootKeyPlural: rootKey)] = data;
           }
 
+          // Do we have an id parameter passed in, in which case we want to extract it and put
+          // it on the data so that we will get the correct object passed back when calling new Resource
+          var allParams = extend({}, extractParams(data, action.params || {}), params);
+          if (!(data && data[idKey]) && allParams[idKey]) {
+            data = data || {};
+            data[idKey] = allParams[idKey];
+          }
+
+          // Calling new Resource with data that contains an id will cause the original object
+          // to be returned if it exists...
           var value = this instanceof Resource ? this : (action.isArray ? [] : new Resource(data));
           $http({
             method: action.method,
-            url: route.url(extend({}, extractParams(data, action.params || {}), params)),
-            data: data,
+            url: route.url(allParams),
+            data: postdata,
             headers: extend({}, action.headers || {})
           }).then(function(response) {
               var data = response.data;
 
-              if (!!rootKey && !!rootKeyPlural) { 
+              if (!!rootKey && !!rootKeyPlural) {
                 var key;
                 // Do we need the plural version?
                 if (action.isArray) {
@@ -409,7 +446,7 @@ angular.module('ngOrtooResource', ['ng']).
                 } else {
                   key = rootKey;
                 }
-                data = data[key]; 
+                data = data[key];
               }
 
               if (data) {
@@ -419,6 +456,18 @@ angular.module('ngOrtooResource', ['ng']).
                     value.push(new Resource(item));
                   });
                 } else {
+                  if (data[idKey]) {
+                    var exVal = idMap[data[idKey]];
+
+                    // If we have an existing value and that isn't the
+                    // current value then don't really know what to do
+                    // - log an error
+                    if(exVal !== value) { $log.error("Have two objects with the same id!"); }
+
+                    // If this is the first time we've seen this id then store it off
+                    if (!exVal) { idMap[data[idKey]] = value; }
+
+                  }
                   copy(data, value);
                 }
               }
